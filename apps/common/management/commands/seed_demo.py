@@ -9,6 +9,7 @@ safe to run repeatedly.
 """
 from datetime import timedelta
 
+from django.contrib.gis.geos import Point
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
@@ -98,7 +99,7 @@ class Command(BaseCommand):
             category = Category.objects.get(key=cat_key)
             kwargs = dict(
                 type=ltype, author=author, category=category, title=title,
-                description=desc, quantity=qty, lat=plat, lng=plng,
+                description=desc, quantity=qty, location=Point(plng, plat, srid=4326),
                 area_label=author.default_area,
             )
             if ltype == "request":

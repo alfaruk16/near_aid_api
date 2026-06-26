@@ -1,3 +1,4 @@
+from django.contrib.gis.geos import Point
 from rest_framework import serializers
 
 from apps.identity.serializers import AuthorSerializer
@@ -54,6 +55,9 @@ class ListingCreateSerializer(serializers.Serializer):
 
     def create(self, validated):
         image_urls = validated.pop("image_urls", [])
+        lat = validated.pop("lat")
+        lng = validated.pop("lng")
+        validated["location"] = Point(float(lng), float(lat), srid=4326)
         listing = Listing.objects.create(author=self.context["request"].user, **validated)
         ListingImage.objects.bulk_create(
             [ListingImage(listing=listing, url=u) for u in image_urls]

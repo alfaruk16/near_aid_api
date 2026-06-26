@@ -1,5 +1,8 @@
 import base64
 
+from django.contrib.gis.db.models.functions import Distance
+from django.contrib.gis.geos import Point
+from django.contrib.gis.measure import D
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -10,7 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.exceptions import ApiError
-from apps.common.geo import distance_band, haversine_km
+from apps.common.geo import distance_band
 from apps.common.permissions import IsVerified
 from apps.safety.models import Block
 
@@ -94,10 +97,10 @@ class ListingListCreateView(APIView):
 class ListingNearbyView(APIView):
     """GET /listings/nearby — primary discovery endpoint (§9.5).
 
-    Powers both the Needs and Offers tabs via ``type``. PostGIS would use
-    ``ST_DWithin(location_fuzzed, point, radius)`` ordered by ``ST_Distance``;
-    here we filter/order with a haversine over the fuzzed point and emit a
-    banded distance so the client can't pinpoint anyone (§13.1).
+    Powers both the Needs and Offers tabs via ``type``. Filtering uses
+    ``ST_DWithin(location_fuzzed, point, radius)`` (GiST-indexed) ordered by
+    ``ST_Distance``; the response emits a banded distance over the fuzzed point
+    so the client can't pinpoint anyone (§13.1).
     """
 
     permission_classes = [IsAuthenticated]
@@ -133,10 +136,15 @@ class ListingNearbyView(APIView):
         except ValueError:
             radius_km = settings.NEARAID["DEFAULT_RADIUS_KM"]
 
+        ref = Point(lng, lat, srid=4326)
         qs = (
             Listing.objects.filter(type=listing_type, status=Listing.Status.OPEN, is_hidden=False)
             .filter(expires_at__gt=timezone.now())
             .exclude(author_id__in=_blocked_user_ids(request.user))
+            # ST_DWithin over the GiST-indexed fuzzed point, ordered by ST_Distance.
+            .filter(location_fuzzed__dwithin=(ref, D(km=radius_km)))
+            .annotate(distance=Distance("location_fuzzed", ref))
+            .order_by("distance")
             .select_related("category", "author")
             .prefetch_related("images")
         )
@@ -148,21 +156,14 @@ class ListingNearbyView(APIView):
         if p.get("q"):
             qs = qs.filter(Q(title__icontains=p["q"]) | Q(description__icontains=p["q"]))
 
-        # Distance filter + ordering over the fuzzed point.
-        scored = []
-        for obj in qs:
-            d = haversine_km(lat, lng, obj.lat_fuzzed, obj.lng_fuzzed)
-            if d <= radius_km:
-                obj.distance_km = distance_band(d)
-                obj._raw_distance = d
-                scored.append(obj)
-        scored.sort(key=lambda o: o._raw_distance)
-
-        # Lightweight offset cursor (stable for a feed snapshot).
+        # Lightweight offset cursor (stable for a feed snapshot); paged in the DB.
         page_size = 20
         offset = self._decode_cursor(p.get("cursor"))
-        window = scored[offset:offset + page_size]
-        has_more = len(scored) > offset + page_size
+        window = list(qs[offset:offset + page_size + 1])
+        has_more = len(window) > page_size
+        window = window[:page_size]
+        for obj in window:
+            obj.distance_km = distance_band(obj.distance.km)
         next_cursor = self._encode_cursor(offset + page_size) if has_more else None
 
         return Response(

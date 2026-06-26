@@ -2,6 +2,7 @@ import uuid
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.gis.db import models as gis_models
 from django.db import models
 from django.utils import timezone
 
@@ -68,10 +69,10 @@ class Listing(models.Model):
 
     # §13.1 location privacy: the exact point is stored (never exposed publicly,
     # encrypted at rest in production) and a jittered point is what discovery uses.
-    lat = models.DecimalField(max_digits=9, decimal_places=6)
-    lng = models.DecimalField(max_digits=9, decimal_places=6)
-    lat_fuzzed = models.DecimalField(max_digits=9, decimal_places=6)
-    lng_fuzzed = models.DecimalField(max_digits=9, decimal_places=6)
+    # geography(Point, 4326) so ST_DWithin/ST_Distance work in metres; PointField
+    # is GiST-indexed by default (spatial_index=True).
+    location = gis_models.PointField(geography=True, srid=4326)
+    location_fuzzed = gis_models.PointField(geography=True, srid=4326)
     area_label = models.CharField(max_length=120, blank=True, help_text='e.g. "Mirpur, Dhaka"')
 
     expires_at = models.DateTimeField(db_index=True)
@@ -92,10 +93,28 @@ class Listing(models.Model):
     def __str__(self):
         return f"[{self.type}] {self.title}"
 
+    # Convenience accessors so serializers can read scalar lat/lng off the
+    # geography points (PostGIS stores Point as (x=lng, y=lat)).
+    @property
+    def lat(self):
+        return self.location.y if self.location else None
+
+    @property
+    def lng(self):
+        return self.location.x if self.location else None
+
+    @property
+    def lat_fuzzed(self):
+        return self.location_fuzzed.y if self.location_fuzzed else None
+
+    @property
+    def lng_fuzzed(self):
+        return self.location_fuzzed.x if self.location_fuzzed else None
+
     def save(self, *args, **kwargs):
         conf = platform_conf()
-        if self.lat is not None and self.lng is not None and self.lat_fuzzed is None:
-            self.lat_fuzzed, self.lng_fuzzed = fuzz_point(self.lat, self.lng, conf.fuzz_radius_m)
+        if self.location is not None and self.location_fuzzed is None:
+            self.location_fuzzed = fuzz_point(self.location, conf.fuzz_radius_m)
         if not self.expires_at:
             self.expires_at = self._default_expiry(conf)
         super().save(*args, **kwargs)

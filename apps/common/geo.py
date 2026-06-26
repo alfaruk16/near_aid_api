@@ -1,22 +1,20 @@
 """
 Geospatial helpers (§13.1 location privacy, §9.5 nearby discovery).
 
-The production stack is PostgreSQL + PostGIS: ``location`` is a
-``geography(Point, 4326)``, ``location_fuzzed`` is a jittered point with a GiST
-index, and nearby queries use ``ST_DWithin`` / ``ST_Distance``. To keep this
-scaffold runnable without GDAL/GEOS, the same semantics are implemented in pure
-Python over lat/lng decimals:
+The stack is PostgreSQL + PostGIS: ``location`` is a ``geography(Point, 4326)``,
+``location_fuzzed`` is a jittered point with a GiST index, and nearby discovery
+filters/orders with ``ST_DWithin`` / ``ST_Distance`` (see ``apps.listings``).
+These helpers cover the privacy transform the database can't express:
 
 * ``fuzz_point`` jitters the exact point by the configured fuzz radius so the
   stored "fuzzed" coordinate never pinpoints a home (±300–500 m).
-* ``haversine_km`` is the great-circle distance used to filter/order by radius.
 * ``distance_band`` rounds distance so the client can show a band, never a pin.
-
-Swapping in PostGIS is a localized change in apps.listings — the API contract
-(fuzzed point + banded distance, exact point withheld) does not change.
+* ``haversine_km`` remains available for non-DB distance checks.
 """
 import math
 import random
+
+from django.contrib.gis.geos import Point
 
 EARTH_RADIUS_KM = 6371.0088
 
@@ -31,20 +29,20 @@ def haversine_km(lat1, lng1, lat2, lng2):
     return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
 
 
-def fuzz_point(lat, lng, radius_m=400):
-    """Return a point randomly displaced within ``radius_m`` metres of the input.
+def fuzz_point(point, radius_m=400):
+    """Return a ``Point`` randomly displaced within ``radius_m`` metres of ``point``.
 
     Used once at write time to derive ``location_fuzzed`` from the exact point
     (§13.1). The exact point is kept private; only this jittered one is exposed.
     """
-    lat, lng = float(lat), float(lng)
+    lng, lat = float(point.x), float(point.y)
     # Random distance (sqrt for uniform area distribution) and bearing.
     distance = radius_m * math.sqrt(random.random())
     bearing = random.uniform(0, 2 * math.pi)
     dlat = (distance * math.cos(bearing)) / 111_320.0
     cos_lat = math.cos(math.radians(lat)) or 1e-6
     dlng = (distance * math.sin(bearing)) / (111_320.0 * cos_lat)
-    return round(lat + dlat, 6), round(lng + dlng, 6)
+    return Point(round(lng + dlng, 6), round(lat + dlat, 6), srid=4326)
 
 
 def distance_band(distance_km):

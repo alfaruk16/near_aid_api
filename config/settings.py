@@ -7,11 +7,11 @@ identity (Auth), listings (Listings/Geo), claims, chat (realtime), ratings,
 safety, notifications (FCM fan-out), adminpanel (Moderation/Admin). A single
 API surface (``config.urls``) is the ingress under ``/v1/...``.
 
-The Listings/Geo service is documented against PostgreSQL + PostGIS. To keep
-the scaffold runnable anywhere (no GDAL/GEOS required), location is stored as
-plain lat/lng and nearby queries use a haversine filter in Python; swapping in
-``django.contrib.gis`` + ``ST_DWithin`` is a localized change in
-``apps/listings``. See README → "Geospatial".
+The Listings/Geo service runs on PostgreSQL + PostGIS: ``location`` and
+``location_fuzzed`` are ``geography(Point, 4326)`` columns (GiST-indexed) and
+nearby discovery uses ``ST_DWithin`` / ``ST_Distance`` via GeoDjango. The
+spatial models require PostGIS; connection settings come from ``.env`` (see
+README → "Geospatial").
 """
 from datetime import timedelta
 from pathlib import Path
@@ -73,6 +73,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.gis",
     # Third party
     "rest_framework",
     "rest_framework_simplejwt",
@@ -125,25 +126,30 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 
-# ── Data layer ── PostgreSQL (+ PostGIS in prod). SQLite fallback for local. ────
-if env("DB_NAME"):
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": env("DB_NAME", "nearaid"),
-            "USER": env("DB_USER", ""),
-            "PASSWORD": env("DB_PASSWORD", ""),
-            "HOST": env("DB_HOST", "127.0.0.1"),
-            "PORT": env("DB_PORT", "5432"),
-        }
+# ── Data layer ── PostgreSQL + PostGIS (required; see README → "Geospatial"). ───
+DATABASES = {
+    "default": {
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
+        "NAME": env("DB_NAME", "nearaid"),
+        "USER": env("DB_USER", "nearaid"),
+        "PASSWORD": env("DB_PASSWORD", "nearaid"),
+        "HOST": env("DB_HOST", "127.0.0.1"),
+        "PORT": env("DB_PORT", "5432"),
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
+}
+
+# GeoDjango needs the GEOS/GDAL shared libraries. Django 4.2's auto-discovery
+# only probes GDAL ≤ 3.6, so newer Homebrew GDAL (3.13) must be pointed at
+# explicitly. Honour an env override, else fall back to the Homebrew paths when
+# present; left unset elsewhere so non-spatial setups don't require GDAL.
+import os.path as _osp  # noqa: E402
+
+_geos = env("GEOS_LIBRARY_PATH", "/opt/homebrew/opt/geos/lib/libgeos_c.dylib")
+_gdal = env("GDAL_LIBRARY_PATH", "/opt/homebrew/opt/gdal/lib/libgdal.dylib")
+if _osp.exists(_geos):
+    GEOS_LIBRARY_PATH = _geos
+if _osp.exists(_gdal):
+    GDAL_LIBRARY_PATH = _gdal
 
 
 # ── Cache + Channels layer ── Redis (optional; in-memory fallback) ──────────────

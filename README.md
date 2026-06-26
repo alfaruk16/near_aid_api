@@ -34,7 +34,7 @@ The public mobile API is mounted under `/v1/...`; the web admin panel under
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env                 # optional; sensible dev defaults otherwise
+cp .env.example .env                 # then set up PostGIS — see "Geospatial" below
 python manage.py migrate
 python manage.py seed_demo           # categories, staff, neighbours, listings
 python manage.py runserver
@@ -111,13 +111,28 @@ meet), and would be encrypted at rest in production.
 
 ## Geospatial
 
-The docs target **PostgreSQL + PostGIS** (`ST_DWithin` / `ST_Distance` over a
-GiST-indexed `geography(Point)`). To keep this scaffold runnable without
-GDAL/GEOS, location is stored as lat/lng decimals and nearby queries use a
-haversine filter in pure Python (`apps/common/geo.py`). The API contract (fuzzed
-point + banded distance) is identical; swapping in GeoDjango is a localized
-change in `apps/listings`. Set `DB_NAME` in `.env` to use PostgreSQL; otherwise a
-bundled SQLite file is used.
+Discovery runs on **PostgreSQL + PostGIS** via GeoDjango. A listing stores two
+`geography(Point, 4326)` columns — `location` (exact, never exposed) and
+`location_fuzzed` (jittered ±300–500 m, GiST-indexed). `GET /listings/nearby`
+filters with `ST_DWithin(location_fuzzed, point, radius)` and orders by
+`ST_Distance`, then emits a *banded* distance so the client never gets a pin
+(§13.1). Point fuzzing and distance banding live in `apps/common/geo.py`.
+
+**Local setup (macOS / Homebrew):**
+
+```bash
+brew install geos proj gdal postgis postgresql@17   # postgis needs pg@17/@18
+brew services start postgresql@17
+createuser -s nearaid 2>/dev/null; createdb -O nearaid nearaid
+psql -d nearaid -c 'CREATE EXTENSION IF NOT EXISTS postgis;'
+```
+
+Connection settings come from `.env` (`DB_NAME`/`DB_USER`/`DB_PASSWORD`, default
+`nearaid`). Because Django 4.2 only auto-probes GDAL ≤ 3.6, `config/settings.py`
+points `GDAL_LIBRARY_PATH` / `GEOS_LIBRARY_PATH` at the Homebrew dylibs (override
+via the same-named env vars on other platforms).
+
+PostGIS is required — the spatial models can't migrate on plain SQLite.
 
 ## Realtime chat (§10)
 
