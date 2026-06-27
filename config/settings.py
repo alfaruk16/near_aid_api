@@ -215,6 +215,14 @@ REST_FRAMEWORK = {
     },
 }
 
+# Local development: the §9.10 rate limits are keyed per-IP, so an emulator (where
+# every phone shares the host IP) hits the OTP cap almost immediately. Lift the
+# limits while DEBUG is on; production keeps the spec values above.
+if DEBUG:
+    REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
+        scope: "100000/day" for scope in REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]
+    }
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=12),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
