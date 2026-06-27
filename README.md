@@ -162,4 +162,106 @@ immutable audit log.
 `apps/notifications/services.notify()` persists a localized notification and logs
 the FCM payload a Celery worker would send. In production, swap `_push_to_devices`
 for the real FCM client and move fan-out into Celery tasks (§11, §22).
-# near_aid_api
+
+## Tech stack & requirements
+
+* **Python 3.9+**, **Django 4.2 (LTS)**, **Django REST Framework**
+* **PostgreSQL + PostGIS** (GeoDjango) for spatial discovery — required, no SQLite fallback
+* **Django Channels** (ASGI) for realtime chat; **Redis** optional for the channel layer / cache / Celery
+* **SimpleJWT** for auth, **drf-spectacular** for the OpenAPI schema + Swagger/ReDoc
+* `django-cors-headers`, `django-filter`, `pillow`
+
+The full pinned list lives in [requirements.txt](requirements.txt). Use a
+virtualenv (`.venv`) as shown in [Quick start](#quick-start).
+
+## Project layout
+
+```
+near_aid_api/
+├── config/                 # Django project: settings, root urls, asgi/wsgi entrypoints
+│   ├── settings.py         # env-driven config, INSTALLED_APPS, GeoDjango lib paths
+│   ├── urls.py             # single API ingress — /v1, /admin/v1, /api/docs, /ws
+│   └── asgi.py             # ASGI app (Channels) for HTTP + WebSocket
+├── apps/                   # one Django app per service box (see Architecture table)
+│   ├── common/             # base models, geo helpers, pagination, errors, config, seeders
+│   │   └── management/commands/   # seed_demo, seed_dummy
+│   ├── identity/           # auth (phone-OTP/JWT), profile, devices
+│   ├── listings/           # categories, requests & offers, /nearby discovery
+│   ├── claims/             # claim → deliver → confirm state machine
+│   ├── chat/               # WebSocket consumers + REST message history
+│   ├── ratings/            # two-way ratings + trust score
+│   ├── safety/             # reports, blocks, auto-hide
+│   ├── notifications/      # device tokens + push fan-out
+│   └── adminpanel/         # /admin/v1 metrics, moderation, config, audit log
+├── media/                  # uploaded files (dev only)
+├── static/                 # collected static assets
+├── manage.py
+├── requirements.txt
+└── .env.example            # copy to .env and adjust
+```
+
+Each app follows the standard Django layout (`models.py`, `serializers.py`,
+`views.py`, `urls.py`, `migrations/`). Cross-cutting concerns (the error
+envelope, cursor pagination, geo fuzzing, runtime `PlatformConfig`) live in
+`apps/common`.
+
+## Seeding data
+
+Two management commands populate a working dev database:
+
+```bash
+python manage.py seed_demo                        # categories, staff, 5 named Dhaka neighbours, sample listings
+python manage.py seed_dummy                        # +20 users, +80 listings across Dhaka (run seed_demo first)
+python manage.py seed_dummy --users 50 --listings 200   # scale up
+python manage.py seed_dummy --flush                # delete dummy rows first
+```
+
+Both are idempotent — deterministic phones/titles mean re-running tops up to the
+target counts instead of duplicating. `seed_dummy` jitters listings around each
+author's area so `/listings/nearby` distance ranking returns meaningful results.
+
+## Contributing
+
+Contributions are welcome — NearAid is an open mutual-aid project.
+
+1. **Fork & branch** — create a feature branch off `main`
+   (`git checkout -b feat/short-description`).
+2. **Set up locally** — follow [Quick start](#quick-start) and the
+   [Geospatial](#geospatial) PostGIS setup. Confirm `python manage.py migrate`
+   and `runserver` work against a PostGIS database.
+3. **Keep changes focused** — keep each app within its service box (see the
+   [Architecture](#architecture) table); shared helpers belong in `apps/common`.
+   Run `python manage.py makemigrations` when you change models and commit the
+   generated migration.
+4. **Follow the conventions** — match the existing style (PEP 8, 4-space indent,
+   type hints where helpful) and honour the project-wide
+   [API conventions](#api-conventions-91): the error envelope, cursor
+   pagination, and the rule that **exact coordinates are never exposed** by
+   public endpoints.
+5. **Verify** — exercise affected endpoints via Swagger UI (`/api/docs/`) or
+   `curl` (see [Try the flow](#try-the-flow)), and add tests for new behaviour.
+6. **Open a PR** — describe the change, reference the relevant docs section
+   (e.g. §13.1), and note any new env vars or migrations.
+
+Please open an issue first for larger features or anything that changes the API
+contract, so it can be discussed before implementation.
+
+## Tests
+
+The test suite uses Django's built-in runner:
+
+```bash
+python manage.py test              # all apps
+python manage.py test apps.claims  # a single app
+```
+
+Tests need a PostGIS-capable database (the configured DB user must be able to
+`CREATE EXTENSION postgis` on the throwaway test database). Test coverage is an
+active area for contribution — new endpoints and state-machine transitions
+especially benefit from tests.
+
+## License
+
+No license has been declared yet, so default copyright applies (all rights
+reserved by the authors). If you intend to use, modify, or distribute the code,
+please open an issue so a license can be added.
