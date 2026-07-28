@@ -111,6 +111,7 @@ class ListingDetailSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
     location_fuzzed = serializers.SerializerMethodField()
     location_exact = serializers.SerializerMethodField()
+    active_claim_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Listing
@@ -118,8 +119,17 @@ class ListingDetailSerializer(serializers.ModelSerializer):
             "id", "type", "status", "title", "description", "quantity",
             "category", "urgency", "available_until", "area_label",
             "location_fuzzed", "location_exact", "images", "author",
-            "expires_at", "created_at", "updated_at",
+            "expires_at", "created_at", "updated_at", "active_claim_id",
         )
+
+    def get_active_claim_id(self, obj):
+        # Owner-only: lets the author drive their side of the handoff (mark delivered / confirm
+        # receipt) from their own listing. Never exposed to other viewers.
+        req = self.context.get("request")
+        if req and req.user.is_authenticated and obj.author_id == req.user.id:
+            claim = obj.active_claim
+            return str(claim.id) if claim else None
+        return None
 
     def get_location_fuzzed(self, obj):
         return {"lat": float(obj.lat_fuzzed), "lng": float(obj.lng_fuzzed)}

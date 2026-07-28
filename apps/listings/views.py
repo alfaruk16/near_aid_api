@@ -264,4 +264,6 @@ class MyListingsView(APIView):
 
         paginator = CursorEnvelopePagination()
         page = paginator.paginate_queryset(qs, request, view=self)
-        return paginator.get_paginated_response(ListingDetailSerializer(page, many=True).data)
+        return paginator.get_paginated_response(
+            ListingDetailSerializer(page, many=True, context={"request": request}).data
+        )
